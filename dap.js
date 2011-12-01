@@ -3,12 +3,158 @@
  *  This library is aimed at abstracting differences between different
  *  Device APIs implementations. Particularly Mozilla B2G, WAC 2.0 and PhoneGap
  *  
- *  Author: José M. Cantera (jmcf@tid.es)
+ *  Author: Jos√© M. Cantera (jmcf@tid.es)
  *  
- *  Company: Telefónica Digital 
+ *  Company: Telef√≥nica Digital 
  * 
  * 
  */
+
+// Generic DOM accessor by element id
+function ele(id) {
+	return document.getElementById(id);
+}
+
+// Global DAPJS object
+if(!window.dapjs) {
+	window.dapjs = (function() {
+		var readCB = null;
+		var watchCB = null;
+		var oldOrientation = null;
+		
+		window.addEventListener("load",consoleHandler,false);
+		
+		function consoleHandler() {
+			if(window.fakeConsole) {
+				var objConsole = new DapConsole();
+				window.console = objConsole;
+			}
+		}
+		
+		function DapConsole() {
+			paint();
+			
+			function paint() {			 							
+				var ele = document.createElement("div");
+				
+				ele.innerHTML = 		
+					'<a id="wac2lib_sc" href="javascript:window.console.toggleShow()">Show Console</a>' + 	
+					'<div id="wac2lib_console" style="background-color: white; display:none; overflow:auto; height:20%">' +
+					'<p id="wac2lib_theConsole"></p>' + 					
+					'</div>'
+				;
+				document.body.appendChild(ele);	
+			}
+			
+			function console () {
+				return ele("wac2lib_console");
+			}
+			
+			this.log = function(msg) {
+				var cons = console().firstChild;
+				var prev = cons.innerHTML;
+				if(prev) {
+					prev += "<br>";
+				}
+				
+				var date = new Date();
+				var hours = date.getHours().toString();
+				if(hours.length < 2) { hours = "0" + hours; }
+				
+				var mins = date.getMinutes().toString();
+				if(mins.length < 2) { mins = "0" + mins; }
+				
+				var secs = date.getSeconds().toString();
+				if(secs.length < 2) { secs = "0" + secs; }
+				var milis = date.getMilliseconds().toString();
+				if(milis.length == 1) { 
+					milis = "00" + milis; 
+				}
+				else if(milis.length == 2) {
+					milis = "0" + milis;
+				}
+				
+				cons.innerHTML = prev + ("[" + hours + ":" + 
+						mins + ":" + secs + ":" + 
+						milis + "] " + msg);
+			}
+			
+			this.toggleShow = function() {
+				if(console().style.display != 'none') {
+					ele("wac2lib_sc").textContent = "Show Console";
+					console().style.display = 'none';
+				}
+				else {
+					ele("wac2lib_sc").textContent = "Hide Console";
+					console().style.display = null;
+				}
+			}
+		}
+		
+		function orientationRead(e) {
+			var normalized = getScreenOrientation(e);
+			readCB(normalized);
+		}
+		
+		function getScreenOrientation(e) {
+			var beta = e.data.beta;
+			var gamma = e.data.gamma;
+			var value;
+			
+			alert(beta);
+				
+			if(beta > -135) 
+				value = 180;
+			else if(beta > 45 && beta < 135) {
+				value = 0;
+			}
+			else if(gamma > 45) {
+				value = -90;
+			}
+			else if(gamma < -45) {
+				value = 90;
+			}			
+			return value;
+		}
+		
+		function orientationWatch(e) {
+			var normalized = getScreenOrientation(e);
+			
+			if(!oldOrientation || normalized != oldOrientation) {
+				oldOrientation = normalized;
+				watchCB(normalized);
+			}
+		}
+		
+		return {
+			// Returns screen orientation 
+			orientation: function(cb) {
+				var or = window.orientation;
+				if(!or) {
+					readCB = cb;
+					var orientation = navigator.sensors.orientation;
+					orientation.onsensordata = orientationRead;
+					orientation.onerror = this.onerror;
+					orientation.read();
+				}
+				else { cb(or); }
+			},
+			// Watch for changes in orientation
+			watchOrientation: function(handler) {
+				if(window.orientation) {
+					window.onorientationchange = handler;
+				}
+				else {
+					watchCB = handler;
+					var orientation = navigator.sensors.orientation;
+					orientation.onsensordata = orientationWatch;
+					orientation.onerror = this.onerror;
+					orientation.startWatch({interval:500});
+				}
+			}
+		};
+	})();
+}
 
 /** Normalization to W3C DAP vibrator API */
 if (!navigator.vibrate) {
@@ -67,19 +213,19 @@ if (!navigator.sensors.accelerometer) {
 			}
 		}
 
-		function accelHandler(acc) {
+		function accelerationHandler(acc) {
 			var obj = null;
 			if (acc.xAxis) {
 				obj = {
-					x : acc.xAxis,
+					x : -acc.xAxis,
 					y : acc.yAxis,
 					z : acc.zAxis
 				};
 			} else {
 				obj = {
-					x : acc.x,
+					x : -acc.x,
 					y : acc.y,
-					z : acc.y
+					z : acc.z
 				};
 			}
 
@@ -103,7 +249,7 @@ if (!navigator.sensors.accelerometer) {
 			}
 
 			if (accel) {
-				watchId = accel.watchAcceleration(accelHandler, this.onerror, {
+				watchId = accel.watchAcceleration(accelerationHandler, this.onerror, {
 					frequency : options.interval,
 					minNotificationInterval : options.interval
 				});
@@ -164,7 +310,7 @@ if (!navigator.sensors.orientation) {
 			}
 		}
 
-		function orientHandler(orev) {
+		function wacOrientationHandler(orev) {
 			that.onsensordata({
 				data : orev
 			});
@@ -172,7 +318,10 @@ if (!navigator.sensors.orientation) {
 
 		function compassHandler(heading) {
 			var obj = {};
-			obj.alpha = heading.magneticHeading;
+			if(heading.magneticHeading) { 
+				obj.alpha = heading.magneticHeading;
+			}
+			else { obj.alpha = heading; }
 
 			obj.beta = null;
 			obj.gamma = null;
@@ -190,7 +339,7 @@ if (!navigator.sensors.orientation) {
 			} else if (window.deviceapis) {
 				if (window.deviceapis.orientation) {
 					var sorient = window.deviceapis.orientation;
-					sorient.getCurrentOrientation(orientHandler, this.onerror);
+					sorient.getCurrentOrientation(wacOrientationHandler, this.onerror);
 				}
 			} else if (window.DeviceOrientationEvent) {
 				window.addEventListener('deviceorientation',
@@ -198,7 +347,7 @@ if (!navigator.sensors.orientation) {
 				window.setTimeout(function() {
 					window.removeEventListener('deviceorientation',
 							deviceOrientationHandler);
-				}, 0);
+				}, 100);
 			} else {
 				if (this.onerror) {
 					this.onerror("Orientation not available");
@@ -216,7 +365,7 @@ if (!navigator.sensors.orientation) {
 			} else if (window.deviceapis) {
 				if (window.deviceapis.orientation) {
 					orient = window.deviceapis.orientation;
-					watchId = orient.watchOrientation(orientHandler,
+					watchId = orient.watchOrientation(wacOrientationHandler,
 							this.onerror, {
 								minNotificationInterval : options.interval
 							});
