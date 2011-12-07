@@ -20,7 +20,9 @@ if(!window.dapjs) {
 	window.dapjs = (function() {
 		var readCB = null;
 		var watchCB = null;
-		var oldOrientation = null;
+		var oldOrientation = 0;
+		
+		var that = this;
 		
 		window.addEventListener("load",consoleHandler,false);
 		
@@ -28,26 +30,47 @@ if(!window.dapjs) {
 			if(window.fakeConsole) {
 				var objConsole = new DapConsole();
 				window.console = objConsole;
+				window.onerror = errorHandler;
 			}
+		}
+		
+		function errorHandler(msg,url,lineNumber) {
+			var str = '';
+			
+			if(url) {
+				str += url + " : ";
+			}
+			
+			if(lineNumber) {
+				str += lineNumber + " : "; 
+			}
+			
+			if(msg) {
+				str += msg;
+			}
+			
+			window.console.log(str);
+			
+			return false;
 		}
 		
 		function DapConsole() {
 			paint();
 			
+			this.element = console();
+			
 			function paint() {			 							
 				var ele = document.createElement("div");
+				ele.id = "dapjs_console";
+				ele.style.overflow = "auto";
+				ele.className = "console";
 				
-				ele.innerHTML = 		
-					'<a id="wac2lib_sc" href="javascript:window.console.toggleShow()">Show Console</a>' + 	
-					'<div id="wac2lib_console" style="background-color: white; display:none; overflow:auto; height:20%">' +
-					'<p id="wac2lib_theConsole"></p>' + 					
-					'</div>'
-				;
-				document.body.appendChild(ele);	
+				ele.innerHTML = '<p id="dapjs_theConsole"></p>';
+				document.body.appendChild(ele);
 			}
 			
 			function console () {
-				return ele("wac2lib_console");
+				return ele("dapjs_console");
 			}
 			
 			this.log = function(msg) {
@@ -81,46 +104,67 @@ if(!window.dapjs) {
 			
 			this.toggleShow = function() {
 				if(console().style.display != 'none') {
-					ele("wac2lib_sc").textContent = "Show Console";
 					console().style.display = 'none';
 				}
 				else {
-					ele("wac2lib_sc").textContent = "Hide Console";
-					console().style.display = null;
+					console().style.display = 'block';
 				}
+			}
+			
+			this.clear = function () {
+				console().firstChild.innerHTML = '';
 			}
 		}
 		
 		function orientationRead(e) {
+			window.console.log("Orientation read invoked");
+			
 			var normalized = getScreenOrientation(e);
+			
+			if(normalized != null) {
+				window.console.log("normalized value: " + normalized);
+				oldOrientation = normalized;
+			}
+			else normalized = oldOrientation;
+			
 			readCB(normalized);
 		}
 		
 		function getScreenOrientation(e) {
 			var beta = e.data.beta;
 			var gamma = e.data.gamma;
-			var value;
+			var value = null;
 			
-			alert(beta);
-				
-			if(beta > -135) 
-				value = 180;
-			else if(beta > 45 && beta < 135) {
-				value = 0;
+			window.console.log("Beta: " + beta);
+			
+			if(beta < -45) {
+				if(beta > -135) {
+					value = 180;
+				}
+			}
+			else if(beta > 45) {
+				if(beta < 135) {
+					value = 0;
+				}
 			}
 			else if(gamma > 45) {
 				value = -90;
 			}
 			else if(gamma < -45) {
 				value = 90;
-			}			
+			}
+			
 			return value;
 		}
 		
 		function orientationWatch(e) {
 			var normalized = getScreenOrientation(e);
 			
-			if(!oldOrientation || normalized != oldOrientation) {
+			if(normalized == null) {
+				normalized = oldOrientation;
+			}
+			
+			if(normalized != oldOrientation) {
 				oldOrientation = normalized;
 				watchCB(normalized);
 			}
@@ -131,25 +175,39 @@ if(!window.dapjs) {
 			orientation: function(cb) {
 				var or = window.orientation;
 				if(!or) {
+					window.console.log("window.orientation property not available");
+					
 					readCB = cb;
 					var orientation = navigator.sensors.orientation;
 					orientation.onsensordata = orientationRead;
 					orientation.onerror = this.onerror;
 					orientation.read();
 				}
-				else { cb(or); }
+				else {
+					window.console.log("window.orientation property available");
+					cb(or);
+				}
 			},
 			// Watch for changes in orientation
-			watchOrientation: function(handler) {
+			onorientationchange: function(handler) {
 				if(window.orientation) {
 					window.onorientationchange = handler;
 				}
 				else {
 					watchCB = handler;
+					oldOrientation = null;
+					
 					var orientation = navigator.sensors.orientation;
-					orientation.onsensordata = orientationWatch;
-					orientation.onerror = this.onerror;
-					orientation.startWatch({interval:500});
+					
+					if(handler) {
+						orientation.onsensordata = orientationWatch;
+						orientation.onerror = this.onerror;
+						orientation.startWatch({interval:500});
+					}
+					else {
+						orientation.onsensordata = null;
+						orientation.endWatch();
+					}
 				}
 			}
 		};
@@ -185,6 +243,7 @@ if (!navigator.sensors.accelerometer) {
 		var gravity = 9.81;
 		var interval = null;
 		var oldTimestamp = null;
+		var readRequested = false;
 
 		function deviceMotionHandler(e) {
 			// window.console.log("device motion invoked");
@@ -193,23 +252,44 @@ if (!navigator.sensors.accelerometer) {
 
 			if (!oldTimestamp || !interval || currentTimestamp - oldTimestamp >= interval) {
 
-				var values = e.accelerationIncludingGravity;
-				var obj = values;
-
-				if (/* window.OrientationEvent */true) {
-					obj = {};
-					// This is mozilla old staff
-					window.console.log("Mozilla motion events");
-					obj.x = values.x * gravity;
-					obj.y = values.y * gravity;
-					obj.z = values.z * gravity;
-				}
+				var obj = normalize(e);
 
 				// window.console.log(that.onsensordata);
 				oldTimestamp = currentTimestamp;
 				
 				window.setTimeout(
-						function() { that.onsensordata({data : obj,timestamp:currentTimestamp}); },0);
+						function() { that.onsensordata({data : obj,
+								timestamp:currentTimestamp,
+								reason:"watch"}); },0);
+			}
+		}
+		
+		function normalize(e) {
+			var values = e.accelerationIncludingGravity;
+			var obj = values;
+
+			if (/* window.OrientationEvent */true) {
+				obj = {};
+				// This is mozilla old staff
+				window.console.log("Mozilla motion events");
+				obj.x = values.x * gravity;
+				obj.y = values.y * gravity;
+				obj.z = values.z * gravity;
+			}
+			
+			return obj;
+		}
+		
+		function deviceMotionReader(e) {
+			if(readRequested) {
+				var currentTimestamp = new Date().getTime();
+				readRequested = false;
+				
+				window.setTimeout(function() { removeEventListener("devicemotion",deviceMotionReader); },0);
+				
+				var obj = normalize(e);
+				
+				window.setTimeout(function() { that.onsensordata({data : obj,timestamp:currentTimestamp, reason:"read"}); } ,0);
 			}
 		}
 
@@ -238,8 +318,21 @@ if (!navigator.sensors.accelerometer) {
 			}
 			that.onsensordata(ret);
 		}
+		
+		// Status attribute not implemented yet
+		this.status = "open";
+		
+		function setStatus(newstatus) {
+			if(that.status != newstatus) {
+				that.status = newstatus;
+				if(that.onstatuschange) {
+					that.onstatuschange();
+				}
+			}
+		}
 
 		this.startWatch = function(options) {
+			// if(this.status == "open") {
 			if (navigator.accelerometer) {
 				accel = navigator.accelerometer;
 			} else if (window.deviceapis) {
@@ -273,6 +366,28 @@ if (!navigator.sensors.accelerometer) {
 				window.removeEventListener('devicemotion', deviceMotionHandler);
 			}
 		};
+		
+		this.read = function() {
+			if (navigator.accelerometer) {
+				accel = navigator.accelerometer;
+			} else if (window.deviceapis) {
+				if (window.deviceapis.accelerometer) {
+					accel = window.deviceapis.accelerometer;
+				}
+			}
+
+			if (accel) {
+				accel.getCurrentAcceleration(accelerationHandler, this.onerror);
+			} else if (window.DeviceMotionEvent) {
+				readRequested = true;
+				window.addEventListener('devicemotion', deviceMotionReader,
+						false);
+			} else {
+				if (this.onerror) {
+					this.onerror("No accelerometer found");
+				}
+			}
+		};
 	}; // navigator.sensors.accelerometer
 } // if(navigator.sensors.accelerometer)
 
@@ -283,30 +398,68 @@ if (!navigator.sensors.orientation) {
 		var that = this;
 		var oldTimestamp = null;
 		var interval = null;
+		var readRequested = false;
+		
+		function deviceOrientationReader(e) {
+			window.console.log("Orientation Reader Event Received: " + e);
+			
+			if(readRequested) {
+				window.console.log("Read had been requested previously");
+				
+				var currentTimestamp = new Date().getTime();
+				var obj = normalizeOrientation(e);
+			
+				if(obj) {
+					readRequested = false;
+					window.setTimeout(function() { window.removeEventListener("deviceorientation",deviceOrientationReader); },0);
+					window.setTimeout(
+							function() { that.onsensordata({data : obj,
+									timestamp:currentTimestamp,
+									reason:"read"}); }
+							,0);
+				}
+			}
+			else {
+				window.console.log("Read had not been requested. Do nothing");
+			}
+		}
+		
+		function normalizeOrientation(e) {
+			var obj = {};
+
+			if (e.beta || e.gamma || e.alpha) {
+				obj.alpha = e.alpha;
+				obj.beta = e.beta;
+				obj.gamma = e.gamma;
+			} else if (e.x) {
+				obj.gamma = -(e.x * (180 / Math.PI));
+				obj.beta = -(e.y * (180 / Math.PI));
+				obj.alpha = null;
+			}
+			else obj = null;
+			
+			return obj;
+		}
 
 		function deviceOrientationHandler(e) {
 			// window.console.log("device orientation invoked" + e.beta);
 			// Here we normalize to the corresponding values
+			
+			window.console.log("Orientation Handler Event Received: " + e);
 
 			var currentTimestamp = new Date().getTime();
 			if (!oldTimestamp || !interval || currentTimestamp - oldTimestamp >= interval) {
 
-				var obj = {};
-
-				if (e.beta || e.gamma || e.alpha) {
-					obj.alpha = e.alpha;
-					obj.beta = e.beta;
-					obj.gamma = e.gamma;
-				} else if (e.x) {
-					obj.gamma = -(e.x * (180 / Math.PI));
-					obj.beta = -(e.y * (180 / Math.PI));
-					obj.alpha = null;
-				}
+				var obj = normalizeOrientation(e);
 				
-				oldTimestamp = currentTimestamp;
-
-				window.setTimeout(
-						function() { that.onsensordata({data : obj,timestamp:currentTimestamp}); },0);
+				if(obj) {
+					oldTimestamp = currentTimestamp;
+					window.setTimeout(
+							function() { that.onsensordata(
+									{data : obj,
+									timestamp:currentTimestamp,
+									reason:"watch"}); },0);
+				}
 			}
 		}
 
@@ -342,12 +495,11 @@ if (!navigator.sensors.orientation) {
 					sorient.getCurrentOrientation(wacOrientationHandler, this.onerror);
 				}
 			} else if (window.DeviceOrientationEvent) {
+				window.console.log("Read: DeviceOrientation event exists");
+				
+				readRequested = true;
 				window.addEventListener('deviceorientation',
-						deviceOrientationHandler, false);
-				window.setTimeout(function() {
-					window.removeEventListener('deviceorientation',
-							deviceOrientationHandler);
-				}, 100);
+						deviceOrientationReader, false);
 			} else {
 				if (this.onerror) {
 					this.onerror("Orientation not available");
